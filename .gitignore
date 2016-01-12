@@ -1,0 +1,111 @@
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor, GradientBoostingClassifier
+
+from sklearn.linear_model import LinearRegression
+import xgboost as xgb
+from sklearn import decomposition
+from collections import defaultdict
+import numpy as np
+import pandas as pd
+from sklearn.cross_validation import StratifiedKFold
+from sklearn import ensemble, preprocessing, grid_search, cross_validation
+
+from sklearn.preprocessing import LabelEncoder
+from collections import Counter
+
+"""
+train.columns.values
+array(['Attendee ID', 'Event ID', 'Rating'], dtype=object)
+AttendanceData.columns.values
+array(['Attendee ID', 'Event ID ', 'Time of Check-in'], dtype=object)
+AttendeeData.columns.values
+array(['Attendee ID    ', 'Home Latitude      ', 'Home Longitude      '], dtype=object)
+Eventdata.columns.values
+array(['Event ID    ', 'Event Venue Latitude        ',
+       'Event Venue Longitude       '], dtype=object)
+
+
+"""
+
+if __name__ == '__main__':
+    train = pd.read_csv('../input/AttendeeRatings(for training).csv')
+    test = pd.read_csv('../input/AttendeeRatings(for evaluation).csv')
+    AttendanceData = pd.read_csv('../input/AttendanceData.csv',parse_dates=['Time of Check-in'])
+    AttendeeData = pd.read_csv('../input/AttendeeData.csv')
+    Eventdata = pd.read_csv('../input/Eventdata.csv') 
+    
+    
+    
+    train.rename(columns = {'Attendee ID':'AttendeeID','Event ID':'EventID'}, inplace = True )
+    test.rename(columns = {'Attendee ID':'AttendeeID','Event ID':'EventID'}, inplace = True )
+    AttendeeData.rename(columns = {'Attendee ID    ':'AttendeeID','Home Latitude      ':'HomeLatitude','Home Longitude      ':'HomeLongitude'}, inplace = True )
+    AttendanceData.rename(columns = {'Attendee ID':'AttendeeID','Event ID ':'EventID','Time of Check-in':'TimeofCheckin'}, inplace = True )
+    Eventdata.rename(columns = {'Event ID    ':'EventID','Event Venue Latitude        ':'EventVenueLatitude','Event Venue Longitude       ':'EventVenueLongitude'}, inplace = True )
+        
+    
+    print train.shape,test.shape
+    
+    AttendanceData['year'] = AttendanceData['TimeofCheckin'].dt.year
+    AttendanceData['month'] = AttendanceData['TimeofCheckin'].dt.month
+    AttendanceData['dayofweek'] = AttendanceData['TimeofCheckin'].dt.dayofweek
+    AttendanceData['day'] = AttendanceData['TimeofCheckin'].dt.day
+
+    
+    train = train.merge(AttendeeData, on = 'AttendeeID' , how = 'left')
+    test = test.merge(AttendeeData, on = 'AttendeeID' , how = 'left')
+    print train.shape,test.shape
+    
+    train = train.merge(AttendanceData, on = ['AttendeeID','EventID'] , how = 'left')
+    test = test.merge(AttendanceData, on = ['AttendeeID','EventID'] , how = 'left')
+    print train.shape,test.shape
+    
+    train = train.merge(Eventdata, on = 'EventID' , how = 'left')
+    test = test.merge(Eventdata, on = 'EventID' , how = 'left')
+    
+    print train.shape,test.shape
+    #train = train[['AttendeeID', 'EventID', 'Rating']].groupby(['AttendeeID', 'EventID']).agg('median')
+    
+    AttendeeID = test.AttendeeID.values
+    EventID    =  test.EventID.values
+    
+    labels = train.Rating.copy()
+    
+    print 'ok'
+    text_columns = []
+    for f in train.columns:
+        if train[f].dtype=='object':
+            print f
+            if f != 'loca':   
+                text_columns.append(f)            
+                lbl = preprocessing.LabelEncoder()
+                lbl.fit(list(train[f].values) + list(test[f].values))
+                train[f] = lbl.transform(list(train[f].values))
+                test[f] = lbl.transform(list(test[f].values))
+
+    test = test.drop(['Rating','TimeofCheckin'],axis = 1)
+    train = train.drop(['Rating','TimeofCheckin'],axis = 1)
+    
+    test = test.replace(np.nan, -1)
+    train = train.replace(np.nan , -1)   
+    train = np.array(train)
+    test = np.array(test)
+    train = train.astype(float)
+    test = test.astype(float)
+    
+    
+    gbm1 = ensemble.GradientBoostingRegressor(random_state = 42, n_estimators=100 , min_samples_split=35, max_depth= 8, learning_rate=.1,max_features = 'sqrt',loss ='ls' )
+    gbm1.fit(train, labels)
+    preds = gbm1.predict(test)
+    preds = pd.DataFrame({"Attendee ID": AttendeeID, "Event ID": EventID,"Rating":preds})
+    test = pd.read_csv('../input/AttendeeRatings(for evaluation).csv')
+    test = test.drop('Rating',axis = 1)
+    l =preds.groupby(['Attendee ID', 'Event ID']).agg('mean').reset_index()
+    print preds.shape,test.shape
+    preds = test.merge(l , on = ['Attendee ID', 'Event ID'] , how = 'left')
+    preds.loc[preds.Rating > 4.5 , 'Rating'] = 5
+    preds.loc[(preds.Rating > 3.5) & (preds.Rating < 4.5), 'Rating'] = 4
+    preds.loc[(preds.Rating > 2.5) & (preds.Rating < 3.5), 'Rating'] = 3
+    preds.loc[(preds.Rating > 1.5) & (preds.Rating < 2.5), 'Rating'] = 2
+    preds.loc[preds.Rating < 1.5, 'Rating'] = 1
+    
+    preds.to_csv('f.csv', index=False, header=False)
+    
